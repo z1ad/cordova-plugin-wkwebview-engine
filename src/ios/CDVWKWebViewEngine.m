@@ -166,7 +166,6 @@ NSTimer *timer;
 
 - (void)pluginInitialize
 {
-    return;
     // viewController would be available now. we attempt to set all possible delegates to it, by default
     NSDictionary* settings = self.commandDelegate.settings;
 
