@@ -29,7 +29,6 @@
 
 #define CDV_BRIDGE_NAME @"cordova"
 #define CDV_WKWEBVIEW_FILE_URL_LOAD_SELECTOR @"loadFileURL:allowingReadAccessToURL:"
-#define CDV_IONIC_STOP_SCROLL @"stopScroll"
 #define CDV_SERVER_PATH @"serverBasePath"
 #define LAST_BINARY_VERSION_CODE @"lastBinaryVersionCode"
 #define LAST_BINARY_VERSION_NAME @"lastBinaryVersionName"
@@ -531,23 +530,18 @@ static void * KVOContext = &KVOContext;
 
 #pragma mark WKScriptMessageHandler implementation
 
-- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message
+- (void)userContentController:(WKUserContentController*)userContentController didReceiveScriptMessage:(WKScriptMessage*)message
 {
-    if ([message.name isEqualToString:CDV_BRIDGE_NAME]) {
-        [self handleCordovaMessage: message];
-    } else if ([message.name isEqualToString:CDV_IONIC_STOP_SCROLL]) {
-        [self handleStopScroll];
-    }
-}
-
-- (void)handleCordovaMessage:(WKScriptMessage*)message
-{
-    CDVViewController *vc = (CDVViewController*)self.viewController;
-
-    NSArray *jsonEntry = message.body; // NSString:callbackId, NSString:service, NSString:action, NSArray:args
-    CDVInvokedUrlCommand* command = [CDVInvokedUrlCommand commandFromJson:jsonEntry];
-    CDV_EXEC_LOG(@"Exec(%@): Calling %@.%@", command.callbackId, command.className, command.methodName);
-
+	if (![message.name isEqualToString:CDV_BRIDGE_NAME]) {
+		return;
+	}
+	
+	CDVViewController* vc = (CDVViewController*)self.viewController;
+	
+	NSArray* jsonEntry = message.body; // NSString:callbackId, NSString:service, NSString:action, NSArray:args
+	CDVInvokedUrlCommand* command = [CDVInvokedUrlCommand commandFromJson:jsonEntry];
+	CDV_EXEC_LOG(@"Exec(%@): Calling %@.%@", command.callbackId, command.className, command.methodName);
+	
     if (![vc.commandQueue execute:command]) {
 #ifdef DEBUG
         NSError* error = nil;
@@ -567,31 +561,6 @@ static void * KVOContext = &KVOContext;
 
         NSLog(@"FAILED pluginJSON = %@", commandString);
 #endif
-    }
-}
-
-- (void)handleStopScroll
-{
-    WKWebView* wkWebView = (WKWebView*)_engineWebView;
-    NSLog(@"CDVWKWebViewEngine: handleStopScroll");
-    [self recursiveStopScroll:[wkWebView scrollView]];
-    [wkWebView evaluateJavaScript:@"window.IonicStopScroll.fire()" completionHandler:nil];
-}
-
-- (void)recursiveStopScroll:(UIView *)node
-{
-    if([node isKindOfClass: [UIScrollView class]]) {
-        UIScrollView *nodeAsScroll = (UIScrollView *)node;
-
-        if([nodeAsScroll isScrollEnabled] && ![nodeAsScroll isHidden]) {
-            [nodeAsScroll setScrollEnabled: NO];
-            [nodeAsScroll setScrollEnabled: YES];
-        }
-    }
-
-    // iterate tree recursivelly
-    for (UIView *child in [node subviews]) {
-        [self recursiveStopScroll:child];
     }
 }
 
