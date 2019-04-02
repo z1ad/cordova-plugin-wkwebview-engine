@@ -29,7 +29,6 @@
 
 #define CDV_BRIDGE_NAME @"cordova"
 #define CDV_WKWEBVIEW_FILE_URL_LOAD_SELECTOR @"loadFileURL:allowingReadAccessToURL:"
-#define CDV_SERVER_PATH @"serverBasePath"
 #define LAST_BINARY_VERSION_CODE @"lastBinaryVersionCode"
 #define LAST_BINARY_VERSION_NAME @"lastBinaryVersionName"
 
@@ -101,7 +100,6 @@
 @property (nonatomic, strong, readwrite) UIView* engineWebView;
 @property (nonatomic, strong, readwrite) id <WKUIDelegate> uiDelegate;
 @property (nonatomic, weak) id <WKScriptMessageHandler> weakScriptMessageHandler;
-@property (nonatomic, readwrite) CGRect frame;
 
 @end
 
@@ -133,8 +131,7 @@ NSTimer *timer;
 
         // add to keyWindow to ensure it is 'active'
         [UIApplication.sharedApplication.keyWindow addSubview:self.engineWebView];
-
-        self.frame = frame;
+		self.engineWebView = [[WKWebView alloc] initWithFrame:frame];
     }
     return self;
 }
@@ -181,7 +178,7 @@ NSTimer *timer;
     // re-create WKWebView, since we need to update configuration
     // remove from keyWindow before recreating
     [self.engineWebView removeFromSuperview];
-    WKWebView* wkWebView = [[WKWebView alloc] initWithFrame:self.frame configuration:configuration];
+    WKWebView* wkWebView = [[WKWebView alloc] initWithFrame:self.engineWebView.frame configuration:configuration];
 
     #if __IPHONE_OS_VERSION_MAX_ALLOWED >= 110000
     if (@available(iOS 11.0, *)) {
@@ -238,7 +235,7 @@ NSTimer *timer;
      name:UIKeyboardWillShowNotification object:nil];
 
 
-    NSLog(@"Using Ionic WKWebView");
+    NSLog(@"Using Custom WKWebView");
 
     [self addURLObserver];
 }
