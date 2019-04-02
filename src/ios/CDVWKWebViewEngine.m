@@ -31,6 +31,10 @@
 #define CDV_BRIDGE_NAME @"cordova"
 #define CDV_IONIC_STOP_SCROLL @"stopScroll"
 #define CDV_WKWEBVIEW_FILE_URL_LOAD_SELECTOR @"loadFileURL:allowingReadAccessToURL:"
+#define CDV_SERVER_PATH @"serverBasePath"
+#define LAST_BINARY_VERSION_CODE @"lastBinaryVersionCode"
+#define LAST_BINARY_VERSION_NAME @"lastBinaryVersionName"
+
 #if __IPHONE_OS_VERSION_MAX_ALLOWED >= 110000
 
 @implementation UIScrollView (BugIOS11)
@@ -99,6 +103,18 @@
 @property (nonatomic, strong, readwrite) UIView* engineWebView;
 @property (nonatomic, strong, readwrite) id <WKUIDelegate> uiDelegate;
 @property (nonatomic, weak) id <WKScriptMessageHandler> weakScriptMessageHandler;
+@property (nonatomic, strong) GCDWebServer *webServer;
+@property (nonatomic, readwrite) CGRect frame;
+@property (nonatomic, strong) NSString *userAgentCreds;
+@property (nonatomic, assign) BOOL internalConnectionsOnly;
+@property (nonatomic, assign) BOOL useScheme;
+@property (nonatomic, strong) IONAssetHandler * handler;
+
+@property (nonatomic, readwrite) NSString *CDV_LOCAL_SERVER;
+@end
+
+// expose private configuration value required for background operation
+@interface WKWebViewConfiguration ()
 
 @end
 
@@ -166,6 +182,11 @@ NSTimer *timer;
 
     // re-create WKWebView, since we need to update configuration
     WKWebView* wkWebView = [[WKWebView alloc] initWithFrame:self.engineWebView.frame configuration:configuration];
+	#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 110000
+    if (@available(iOS 11.0, *)) {
+      [wkWebView.scrollView setContentInsetAdjustmentBehavior:UIScrollViewContentInsetAdjustmentNever];
+    }
+    #endif
     wkWebView.UIDelegate = self.uiDelegate;
     self.engineWebView = wkWebView;
 
@@ -187,6 +208,12 @@ NSTimer *timer;
         [wkWebView.configuration.userContentController addScriptMessageHandler:(id < WKScriptMessageHandler >)self.viewController name:CDV_BRIDGE_NAME];
     }
 
+    [self keyboardDisplayDoesNotRequireUserAction];
+
+    if ([settings cordovaBoolSettingForKey:@"KeyboardAppearanceDark" defaultValue:NO]) {
+        [self setKeyboardAppearanceDark];
+    }
+
     [self updateSettings:settings];
 
     // check if content thread has died on resume
@@ -196,18 +223,92 @@ NSTimer *timer;
            selector:@selector(onAppWillEnterForeground:)
                name:UIApplicationWillEnterForegroundNotification object:nil];
 
-    NSLog(@"Using WKWebView");
+    [[NSNotificationCenter defaultCenter]
+     addObserver:self
+     selector:@selector(keyboardWillHide)
+     name:UIKeyboardWillHideNotification object:nil];
+
+    [[NSNotificationCenter defaultCenter]
+     addObserver:self
+     selector:@selector(keyboardWillShow)
+     name:UIKeyboardWillShowNotification object:nil];
+
+
+    NSLog(@"Using Ionic WKWebView");
 
     [self addURLObserver];
 }
 
-- (void)onReset {
+// https://github.com/Telerik-Verified-Plugins/WKWebView/commit/04e8296adeb61f289f9c698045c19b62d080c7e3#L609-L620
+- (void) keyboardDisplayDoesNotRequireUserAction {
+    Class class = NSClassFromString(@"WKContentView");
+    NSOperatingSystemVersion iOS_11_3_0 = (NSOperatingSystemVersion){11, 3, 0};
+    NSOperatingSystemVersion iOS_12_2_0 = (NSOperatingSystemVersion){12, 2, 0};
+    char * methodSignature = "_startAssistingNode:userIsInteracting:blurPreviousNode:changingActivityState:userObject:";
+
+    if ([[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion: iOS_12_2_0]) {
+        methodSignature = "_elementDidFocus:userIsInteracting:blurPreviousNode:changingActivityState:userObject:";
+    }
+
+    if ([[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion: iOS_11_3_0]) {
+        SEL selector = sel_getUid(methodSignature);
+        Method method = class_getInstanceMethod(class, selector);
+        IMP original = method_getImplementation(method);
+        IMP override = imp_implementationWithBlock(^void(id me, void* arg0, BOOL arg1, BOOL arg2, BOOL arg3, id arg4) {
+            ((void (*)(id, SEL, void*, BOOL, BOOL, BOOL, id))original)(me, selector, arg0, TRUE, arg2, arg3, arg4);
+        });
+        method_setImplementation(method, override);
+    } else {
+        SEL selector = sel_getUid("_startAssistingNode:userIsInteracting:blurPreviousNode:userObject:");
+        Method method = class_getInstanceMethod(class, selector);
+        IMP original = method_getImplementation(method);
+        IMP override = imp_implementationWithBlock(^void(id me, void* arg0, BOOL arg1, BOOL arg2, id arg3) {
+            ((void (*)(id, SEL, void*, BOOL, BOOL, id))original)(me, selector, arg0, TRUE, arg2, arg3);
+        });
+        method_setImplementation(method, override);
+    }
+}
+
+- (NSString*)getUserAgentCredentials {
+    if (self.userAgentCreds == nil) {
+        self.userAgentCreds = [self generateRandomString:32];
+    }
+    return self.userAgentCreds;
+}
+
+- (NSString*)generateRandomString:(int)num {
+    NSMutableString* string = [NSMutableString stringWithCapacity:num];
+    for (int i = 0; i < num; i++) {
+        [string appendFormat:@"%C", (unichar)('a' + arc4random_uniform(26))];
+    }
+    return string;
+}
+
+- (void)setKeyboardAppearanceDark
+{
+    IMP darkImp = imp_implementationWithBlock(^(id _s) {
+        return UIKeyboardAppearanceDark;
+    });
+    for (NSString* classString in @[@"WKContentView", @"UITextInputTraits"]) {
+        Class c = NSClassFromString(classString);
+        Method m = class_getInstanceMethod(c, @selector(keyboardAppearance));
+        if (m != NULL) {
+            method_setImplementation(m, darkImp);
+        } else {
+            class_addMethod(c, @selector(keyboardAppearance), darkImp, "l@:");
+        }
+    }
+}
+
+- (void)onReset
+{
     [self addURLObserver];
 }
 
 static void * KVOContext = &KVOContext;
 
-- (void)addURLObserver {
+- (void)addURLObserver
+{
     if(!IsAtLeastiOSVersion(@"9.0")){
         [self.webView addObserver:self forKeyPath:@"URL" options:0 context:KVOContext];
     }
@@ -232,10 +333,43 @@ static void * KVOContext = &KVOContext;
     }
 }
 
+-(void)keyboardWillHide
+{
+    if (@available(iOS 12.0, *)) {
+        timer = [NSTimer scheduledTimerWithTimeInterval:0 target:self selector:@selector(keyboardDisplacementFix) userInfo:nil repeats:false];
+        [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
+    }
+}
+
+-(void)keyboardWillShow
+{
+    if (timer != nil) {
+        [timer invalidate];
+    }
+}
+
+-(void)keyboardDisplacementFix
+{
+    // https://stackoverflow.com/a/9637807/824966
+    [UIView animateWithDuration:.25 animations:^{
+        self.webView.scrollView.contentOffset = CGPointMake(0, 0);
+    }];
+
+}
+
+- (void)onSocketError:(NSNotification *)notification {
+    [self loadErrorPage:nil];
+}
+
 - (BOOL)shouldReloadWebView
 {
     WKWebView* wkWebView = (WKWebView*)_engineWebView;
     return [self shouldReloadWebView:wkWebView.URL title:wkWebView.title];
+}
+
+- (BOOL)isSafeToReload
+{
+    return [self.webServer isRunning] || self.useScheme;
 }
 
 - (BOOL)shouldReloadWebView:(NSURL*)location title:(NSString*)title
@@ -308,13 +442,6 @@ static void * KVOContext = &KVOContext;
 - (void)updateSettings:(NSDictionary*)settings
 {
     WKWebView* wkWebView = (WKWebView*)_engineWebView;
-
-    wkWebView.configuration.preferences.minimumFontSize = [settings cordovaFloatSettingForKey:@"MinimumFontSize" defaultValue:0.0];
-
-    /*
-     wkWebView.configuration.preferences.javaScriptEnabled = [settings cordovaBoolSettingForKey:@"JavaScriptEnabled" default:YES];
-     wkWebView.configuration.preferences.javaScriptCanOpenWindowsAutomatically = [settings cordovaBoolSettingForKey:@"JavaScriptCanOpenWindowsAutomatically" default:NO];
-     */
 
     // By default, DisallowOverscroll is false (thus bounce is allowed)
     BOOL bounceAllowed = !([settings cordovaBoolSettingForKey:@"DisallowOverscroll" defaultValue:NO]);
