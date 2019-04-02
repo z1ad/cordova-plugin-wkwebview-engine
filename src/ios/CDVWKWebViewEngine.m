@@ -28,6 +28,7 @@
 #import "CDVWKProcessPoolFactory.h"
 
 #define CDV_BRIDGE_NAME @"cordova"
+#define CDV_WKWEBVIEW_FILE_URL_LOAD_SELECTOR @"loadFileURL:allowingReadAccessToURL:"
 #define CDV_IONIC_STOP_SCROLL @"stopScroll"
 #define CDV_SERVER_PATH @"serverBasePath"
 #define LAST_BINARY_VERSION_CODE @"lastBinaryVersionCode"
@@ -178,17 +179,20 @@ NSTimer *timer;
     configuration.userContentController = userContentController;
 
     // re-create WKWebView, since we need to update configuration
-  [self.engineWebView removeFromSuperview];
-    WKWebView* wkWebView = [[WKWebView alloc] initWithFrame:self.engineWebView.frame configuration:configuration];
-	#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 110000
+    // remove from keyWindow before recreating
+    [self.engineWebView removeFromSuperview];
+    WKWebView* wkWebView = [[WKWebView alloc] initWithFrame:self.frame configuration:configuration];
+
+    #if __IPHONE_OS_VERSION_MAX_ALLOWED >= 110000
     if (@available(iOS 11.0, *)) {
       [wkWebView.scrollView setContentInsetAdjustmentBehavior:UIScrollViewContentInsetAdjustmentNever];
     }
     #endif
+
     wkWebView.UIDelegate = self.uiDelegate;
     self.engineWebView = wkWebView;
-  // add to keyWindow to ensure it is 'active'
-  [UIApplication.sharedApplication.keyWindow addSubview:self.engineWebView];
+    // add to keyWindow to ensure it is 'active'
+    [UIApplication.sharedApplication.keyWindow addSubview:self.engineWebView];
 
     if (IsAtLeastiOSVersion(@"9.0") && [self.viewController isKindOfClass:[CDVViewController class]]) {
         wkWebView.customUserAgent = ((CDVViewController*) self.viewController).userAgent;
@@ -326,6 +330,7 @@ static void * KVOContext = &KVOContext;
     }
 }
 
+
 -(void)keyboardWillHide
 {
     if (@available(iOS 12.0, *)) {
@@ -385,33 +390,32 @@ static void * KVOContext = &KVOContext;
 
 - (id)loadRequest:(NSURLRequest *)request
 {
+  if ([self canLoadRequest:request]) { // can load, differentiate between file urls and other schemes
     if (request.URL.fileURL) {
-        NSURL* startURL = [NSURL URLWithString:((CDVViewController *)self.viewController).startPage];
-        NSString* startFilePath = [self.commandDelegate pathForResource:[startURL path]];
-        NSURL *url = [[NSURL URLWithString:self.CDV_LOCAL_SERVER] URLByAppendingPathComponent:request.URL.path];
-        if ([request.URL.path isEqualToString:startFilePath]) {
-            url = [NSURL URLWithString:self.CDV_LOCAL_SERVER];
-        }
-        if(request.URL.query) {
-            url = [NSURL URLWithString:[@"?" stringByAppendingString:request.URL.query] relativeToURL:url];
-        }
-        if(request.URL.fragment) {
-            url = [NSURL URLWithString:[@"#" stringByAppendingString:request.URL.fragment] relativeToURL:url];
-        }
-        request = [NSURLRequest requestWithURL:url];
-    }
-    if ([self isSafeToReload]) {
-        return [(WKWebView*)_engineWebView loadRequest:request];
+      SEL wk_sel = NSSelectorFromString(CDV_WKWEBVIEW_FILE_URL_LOAD_SELECTOR);
+      NSURL* readAccessUrl = [request.URL URLByDeletingLastPathComponent];
+      return ((id (*)(id, SEL, id, id))objc_msgSend)(_engineWebView, wk_sel, request.URL, readAccessUrl);
     } else {
-        return [self loadErrorPage:request];
+      return [(WKWebView*)_engineWebView loadRequest:request];
     }
+  } else { // can't load, print out error
+    NSString* errorHtml = [NSString stringWithFormat:
+                           @"<!doctype html>"
+                           @"<title>Error</title>"
+                           @"<div style='font-size:2em'>"
+                           @"   <p>The WebView engine '%@' is unable to load the request: %@</p>"
+                           @"   <p>Most likely the cause of the error is that the loading of file urls is not supported in iOS %@.</p>"
+                           @"</div>",
+                           NSStringFromClass([self class]),
+                           [request.URL description],
+                           [[UIDevice currentDevice] systemVersion]
+                           ];
+    return [self loadHTMLString:errorHtml baseURL:nil];
+  }
 }
 
 - (id)loadErrorPage:(NSURLRequest *)request
 {
-    if (!request) {
-        request = [NSURLRequest requestWithURL:[NSURL URLWithString:self.CDV_LOCAL_SERVER]];
-    }
     NSString* errorHtml = [NSString stringWithFormat:
                            @"<html>"
                            @"<head><title>Error</title></head>"
@@ -421,7 +425,7 @@ static void * KVOContext = &KVOContext;
                            @"   </div>"
                            @"</html>"
                            ];
-    return [self loadHTMLString:errorHtml baseURL:request.URL];
+    return [self loadHTMLString:errorHtml baseURL:nil];
 }
 
 - (id)loadHTMLString:(NSString *)string baseURL:(NSURL*)baseURL
@@ -528,13 +532,18 @@ static void * KVOContext = &KVOContext;
 
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message
 {
-    if (![message.name isEqualToString:CDV_BRIDGE_NAME]) {
-        return;
+    if ([message.name isEqualToString:CDV_BRIDGE_NAME]) {
+        [self handleCordovaMessage: message];
+    } else if ([message.name isEqualToString:CDV_IONIC_STOP_SCROLL]) {
+        [self handleStopScroll];
     }
+}
 
-    CDVViewController* vc = (CDVViewController*)self.viewController;
+- (void)handleCordovaMessage:(WKScriptMessage*)message
+{
+    CDVViewController *vc = (CDVViewController*)self.viewController;
 
-    NSArray* jsonEntry = message.body; // NSString:callbackId, NSString:service, NSString:action, NSArray:args
+    NSArray *jsonEntry = message.body; // NSString:callbackId, NSString:service, NSString:action, NSArray:args
     CDVInvokedUrlCommand* command = [CDVInvokedUrlCommand commandFromJson:jsonEntry];
     CDV_EXEC_LOG(@"Exec(%@): Calling %@.%@", command.callbackId, command.className, command.methodName);
 
@@ -550,15 +559,41 @@ static void * KVOContext = &KVOContext;
             commandJson = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
         }
 
-            static NSUInteger maxLogLength = 1024;
-            NSString* commandString = ([commandJson length] > maxLogLength) ?
-                [NSString stringWithFormat : @"%@[...]", [commandJson substringToIndex:maxLogLength]] :
-                commandJson;
+        static NSUInteger maxLogLength = 1024;
+        NSString* commandString = ([commandJson length] > maxLogLength) ?
+        [NSString stringWithFormat : @"%@[...]", [commandJson substringToIndex:maxLogLength]] :
+        commandJson;
 
-            NSLog(@"FAILED pluginJSON = %@", commandString);
+        NSLog(@"FAILED pluginJSON = %@", commandString);
 #endif
     }
 }
+
+- (void)handleStopScroll
+{
+    WKWebView* wkWebView = (WKWebView*)_engineWebView;
+    NSLog(@"CDVWKWebViewEngine: handleStopScroll");
+    [self recursiveStopScroll:[wkWebView scrollView]];
+    [wkWebView evaluateJavaScript:@"window.IonicStopScroll.fire()" completionHandler:nil];
+}
+
+- (void)recursiveStopScroll:(UIView *)node
+{
+    if([node isKindOfClass: [UIScrollView class]]) {
+        UIScrollView *nodeAsScroll = (UIScrollView *)node;
+
+        if([nodeAsScroll isScrollEnabled] && ![nodeAsScroll isHidden]) {
+            [nodeAsScroll setScrollEnabled: NO];
+            [nodeAsScroll setScrollEnabled: YES];
+        }
+    }
+
+    // iterate tree recursivelly
+    for (UIView *child in [node subviews]) {
+        [self recursiveStopScroll:child];
+    }
+}
+
 
 #pragma mark WKNavigationDelegate implementation
 
