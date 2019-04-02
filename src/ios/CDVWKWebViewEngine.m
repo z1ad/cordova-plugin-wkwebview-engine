@@ -27,7 +27,6 @@
 #import "CDVWKWebViewUIDelegate.h"
 #import "CDVWKProcessPoolFactory.h"
 
-
 #define CDV_BRIDGE_NAME @"cordova"
 #define CDV_IONIC_STOP_SCROLL @"stopScroll"
 #define CDV_WKWEBVIEW_FILE_URL_LOAD_SELECTOR @"loadFileURL:allowingReadAccessToURL:"
@@ -103,18 +102,6 @@
 @property (nonatomic, strong, readwrite) UIView* engineWebView;
 @property (nonatomic, strong, readwrite) id <WKUIDelegate> uiDelegate;
 @property (nonatomic, weak) id <WKScriptMessageHandler> weakScriptMessageHandler;
-@property (nonatomic, strong) GCDWebServer *webServer;
-@property (nonatomic, readwrite) CGRect frame;
-@property (nonatomic, strong) NSString *userAgentCreds;
-@property (nonatomic, assign) BOOL internalConnectionsOnly;
-@property (nonatomic, assign) BOOL useScheme;
-@property (nonatomic, strong) IONAssetHandler * handler;
-
-@property (nonatomic, readwrite) NSString *CDV_LOCAL_SERVER;
-@end
-
-// expose private configuration value required for background operation
-@interface WKWebViewConfiguration ()
 
 @end
 
@@ -134,7 +121,11 @@ NSTimer *timer;
         if (NSClassFromString(@"WKWebView") == nil) {
             return nil;
         }
-
+        if(!IsAtLeastiOSVersion(@"9.0")) {
+            return nil;
+        }
+    // add to keyWindow to ensure it is 'active'
+    [UIApplication.sharedApplication.keyWindow addSubview:self.engineWebView];
         self.engineWebView = [[WKWebView alloc] initWithFrame:frame];
     }
 
@@ -181,6 +172,7 @@ NSTimer *timer;
     configuration.userContentController = userContentController;
 
     // re-create WKWebView, since we need to update configuration
+  [self.engineWebView removeFromSuperview];
     WKWebView* wkWebView = [[WKWebView alloc] initWithFrame:self.engineWebView.frame configuration:configuration];
 	#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 110000
     if (@available(iOS 11.0, *)) {
@@ -189,6 +181,8 @@ NSTimer *timer;
     #endif
     wkWebView.UIDelegate = self.uiDelegate;
     self.engineWebView = wkWebView;
+  // add to keyWindow to ensure it is 'active'
+  [UIApplication.sharedApplication.keyWindow addSubview:self.engineWebView];
 
     if (IsAtLeastiOSVersion(@"9.0") && [self.viewController isKindOfClass:[CDVViewController class]]) {
         wkWebView.customUserAgent = ((CDVViewController*) self.viewController).userAgent;
@@ -472,6 +466,7 @@ static void * KVOContext = &KVOContext;
     }
 
     wkWebView.allowsBackForwardNavigationGestures = [settings cordovaBoolSettingForKey:@"AllowBackForwardNavigationGestures" defaultValue:NO];
+  	wkWebView.allowsLinkPreview = [settings cordovaBoolSettingForKey:@"Allow3DTouchLinkPreview" defaultValue:YES];
 }
 
 - (void)updateWithInfo:(NSDictionary*)info
