@@ -25,8 +25,8 @@ var WkWebKit = {
     allowsBackForwardNavigationGestures: function (allow) {
         exec(null, null, 'CDVWKWebViewEngine', 'allowsBackForwardNavigationGestures', [allow]);
     },
-    safeAreaInsets: function (callback) {
-        exec(callback, null, 'CDVWKWebViewEngine', 'safeAreaInsets', []);
+    getSafeAreaInsets: function (callback) {
+        exec(callback, null, 'CDVWKWebViewEngine', 'getSafeAreaInsets', []);
     }
 };
 
