@@ -713,10 +713,10 @@ static void * KVOContext = &KVOContext;
 	// Create an object
     NSDictionary *jsonObj = [ [NSDictionary alloc]
                                initWithObjectsAndKeys : 
-                               topPadding, @"top",
-							   leftPadding, @"left",
-							   bottomPadding, @"bottom",
-							   rightPadding, @"right",
+                               @(topPadding), @"top",
+							   @(leftPadding), @"left",
+							   @(bottomPadding), @"bottom",
+							   @(rightPadding), @"right",
                                nil
                             ];
        
