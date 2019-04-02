@@ -664,7 +664,7 @@ static void * KVOContext = &KVOContext;
 
 #pragma mark - Plugin interface
 
--(void)safeAreaInsets:(CDVInvokedUrlCommand*)command
+-(void)getSafeAreaInsets:(CDVInvokedUrlCommand*)command
 {
 	CGFloat topPadding = 0, leftPadding = 0, bottomPadding = 0, rightPadding = 0;
 
@@ -691,7 +691,7 @@ static void * KVOContext = &KVOContext;
                                       messageAsDictionary : jsonObj
                                     ];
 	
-    NSLog( @"safeAreaInsets: %@", jsonObj );
+    NSLog( @"getSafeAreaInsets: %@", jsonObj );
     [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
 }
 
