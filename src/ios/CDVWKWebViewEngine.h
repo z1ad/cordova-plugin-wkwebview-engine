@@ -24,6 +24,7 @@
 
 @property (nonatomic, strong, readonly) id <WKUIDelegate> uiDelegate;
 
+- (void)safeAreaInsets:(CDVInvokedUrlCommand*)command;
 - (void)allowsBackForwardNavigationGestures:(CDVInvokedUrlCommand*)command;
 
 @end
