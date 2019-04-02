@@ -105,6 +105,12 @@
 
 @end
 
+// expose private configuration value required for background operation
+@interface WKWebViewConfiguration ()
+
+@end
+
+
 // see forwardingTargetForSelector: selector comment for the reason for this pragma
 #pragma clang diagnostic ignored "-Wprotocol"
 
@@ -263,21 +269,6 @@ NSTimer *timer;
     }
 }
 
-- (NSString*)getUserAgentCredentials {
-    if (self.userAgentCreds == nil) {
-        self.userAgentCreds = [self generateRandomString:32];
-    }
-    return self.userAgentCreds;
-}
-
-- (NSString*)generateRandomString:(int)num {
-    NSMutableString* string = [NSMutableString stringWithCapacity:num];
-    for (int i = 0; i < num; i++) {
-        [string appendFormat:@"%C", (unichar)('a' + arc4random_uniform(26))];
-    }
-    return string;
-}
-
 - (void)setKeyboardAppearanceDark
 {
     IMP darkImp = imp_implementationWithBlock(^(id _s) {
@@ -352,7 +343,7 @@ static void * KVOContext = &KVOContext;
 }
 
 - (void)onSocketError:(NSNotification *)notification {
-    [self loadErrorPage:nil];
+    //[self loadErrorPage:nil];
 }
 
 - (BOOL)shouldReloadWebView
@@ -363,7 +354,7 @@ static void * KVOContext = &KVOContext;
 
 - (BOOL)isSafeToReload
 {
-    return [self.webServer isRunning] || self.useScheme;
+    return true; //[self.webServer isRunning] || self.useScheme;
 }
 
 - (BOOL)shouldReloadWebView:(NSURL*)location title:(NSString*)title
@@ -590,7 +581,11 @@ static void * KVOContext = &KVOContext;
 
 - (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView
 {
-    [webView reload];
+    if ([self isSafeToReload]) {
+        [webView reload];
+    } else {
+        //[self loadErrorPage:nil];
+    }
 }
 
 - (BOOL)defaultResourcePolicyForURL:(NSURL*)url
@@ -603,7 +598,7 @@ static void * KVOContext = &KVOContext;
     return NO;
 }
 
-- (void) webView: (WKWebView *) webView decidePolicyForNavigationAction: (WKNavigationAction*) navigationAction decisionHandler: (void (^)(WKNavigationActionPolicy)) decisionHandler
+- (void) webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction*)navigationAction decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler
 {
     NSURL* url = [navigationAction.request URL];
     CDVViewController* vc = (CDVViewController*)self.viewController;
