@@ -17,15 +17,73 @@
  under the License.
  */
 
+#import <Cordova/NSDictionary+CordovaPreferences.h>
+#import <MobileCoreServices/MobileCoreServices.h>
+#import <AVFoundation/AVFoundation.h>
+#import <objc/message.h>
+#import <objc/runtime.h>
+
 #import "CDVWKWebViewEngine.h"
 #import "CDVWKWebViewUIDelegate.h"
 #import "CDVWKProcessPoolFactory.h"
-#import <Cordova/NSDictionary+CordovaPreferences.h>
 
-#import <objc/message.h>
 
 #define CDV_BRIDGE_NAME @"cordova"
+#define CDV_IONIC_STOP_SCROLL @"stopScroll"
 #define CDV_WKWEBVIEW_FILE_URL_LOAD_SELECTOR @"loadFileURL:allowingReadAccessToURL:"
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 110000
+
+@implementation UIScrollView (BugIOS11)
+
++ (void)load {
+    if (@available(iOS 11.0, *)) {
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            Class class = [self class];
+            SEL originalSelector = @selector(init);
+            SEL swizzledSelector = @selector(xxx_init);
+
+            Method originalMethod = class_getInstanceMethod(class, originalSelector);
+            Method swizzledMethod = class_getInstanceMethod(class, swizzledSelector);
+
+            BOOL didAddMethod =
+            class_addMethod(class,
+                            originalSelector,
+                            method_getImplementation(swizzledMethod),
+                            method_getTypeEncoding(swizzledMethod));
+
+            if (didAddMethod) {
+                class_replaceMethod(class,
+                                    swizzledSelector,
+                                    method_getImplementation(originalMethod),
+                                    method_getTypeEncoding(originalMethod));
+            } else {
+                method_exchangeImplementations(originalMethod, swizzledMethod);
+            }
+        });
+    }
+}
+
+#pragma mark - Method Swizzling
+
+- (id)xxx_init {
+    id a = [self xxx_init];
+    if (@available(iOS 11.0, *)) {
+        NSArray *stack = [NSThread callStackSymbols];
+        for(NSString *trace in stack) {
+            if([trace containsString:@"WebKit"]) {
+                [a setContentInsetAdjustmentBehavior:UIScrollViewContentInsetAdjustmentNever];
+                break;
+            }
+        }
+    }
+    return a;
+}
+
+@end
+
+#endif
+
 
 @interface CDVWKWeakScriptMessageHandler : NSObject <WKScriptMessageHandler>
 
@@ -51,6 +109,8 @@
 
 @synthesize engineWebView = _engineWebView;
 
+NSTimer *timer;
+
 - (instancetype)initWithFrame:(CGRect)frame
 {
     self = [super init];
@@ -69,14 +129,23 @@
 {
     WKWebViewConfiguration* configuration = [[WKWebViewConfiguration alloc] init];
     configuration.processPool = [[CDVWKProcessPoolFactory sharedFactory] sharedProcessPool];
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 110000
+    if(@available(iOS 10.0, *)) {
+        configuration.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
+    }else{
+        configuration.mediaPlaybackRequiresUserAction = YES;
+    }
+#else
+    configuration.mediaPlaybackRequiresUserAction = YES;
+#endif
+
     if (settings == nil) {
         return configuration;
     }
 
-    configuration.allowsInlineMediaPlayback = [settings cordovaBoolSettingForKey:@"AllowInlineMediaPlayback" defaultValue:NO];
-    configuration.mediaPlaybackRequiresUserAction = [settings cordovaBoolSettingForKey:@"MediaPlaybackRequiresUserAction" defaultValue:YES];
+    configuration.allowsInlineMediaPlayback = [settings cordovaBoolSettingForKey:@"AllowInlineMediaPlayback" defaultValue:YES];
     configuration.suppressesIncrementalRendering = [settings cordovaBoolSettingForKey:@"SuppressesIncrementalRendering" defaultValue:NO];
-    configuration.mediaPlaybackAllowsAirPlay = [settings cordovaBoolSettingForKey:@"MediaPlaybackAllowsAirPlay" defaultValue:YES];
+    configuration.allowsAirPlayForMediaPlayback = [settings cordovaBoolSettingForKey:@"MediaPlaybackAllowsAirPlay" defaultValue:YES];
     return configuration;
 }
 
@@ -97,13 +166,6 @@
 
     // re-create WKWebView, since we need to update configuration
     WKWebView* wkWebView = [[WKWebView alloc] initWithFrame:self.engineWebView.frame configuration:configuration];
-
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 110000
-    if (@available(iOS 11.0, *)) {
-        [wkWebView.scrollView setContentInsetAdjustmentBehavior:UIScrollViewContentInsetAdjustmentNever];
-    }
-#endif
-    
     wkWebView.UIDelegate = self.uiDelegate;
     self.engineWebView = wkWebView;
 
@@ -283,7 +345,6 @@ static void * KVOContext = &KVOContext;
     }
 
     wkWebView.allowsBackForwardNavigationGestures = [settings cordovaBoolSettingForKey:@"AllowBackForwardNavigationGestures" defaultValue:NO];
-    wkWebView.allowsLinkPreview = [settings cordovaBoolSettingForKey:@"Allow3DTouchLinkPreview" defaultValue:YES];
 }
 
 - (void)updateWithInfo:(NSDictionary*)info
