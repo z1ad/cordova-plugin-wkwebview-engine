@@ -698,6 +698,36 @@ static void * KVOContext = &KVOContext;
 
 #pragma mark - Plugin interface
 
+-(void)safeAreaInsets:(CDVInvokedUrlCommand*)command
+{
+	CGFloat topPadding = 0, leftPadding = 0, bottomPadding = 0, rightPadding = 0;
+
+	if (@available(iOS 11.0, *)) {
+	    UIWindow *window = UIApplication.sharedApplication.keyWindow;
+	    topPadding = window.safeAreaInsets.top;
+		leftPadding = window.safeAreaInsets.left;
+	    bottomPadding = window.safeAreaInsets.bottom;
+		rightPadding = window.safeAreaInsets.right;
+	}
+
+	// Create an object
+    NSDictionary *jsonObj = [ [NSDictionary alloc]
+                               initWithObjectsAndKeys : 
+                               topPadding, @"top",
+							   leftPadding, @"left",
+							   bottomPadding, @"bottom",
+							   rightPadding, @"right",
+                               nil
+                            ];
+       
+    CDVPluginResult *pluginResult = [ CDVPluginResult
+                                      resultWithStatus    : CDVCommandStatus_OK
+                                      messageAsDictionary : jsonObj
+                                    ];
+    
+    [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+}
+
 - (void)allowsBackForwardNavigationGestures:(CDVInvokedUrlCommand*)command;
 {
     id value = [command argumentAtIndex:0];
