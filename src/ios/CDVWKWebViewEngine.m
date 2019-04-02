@@ -29,7 +29,6 @@
 
 #define CDV_BRIDGE_NAME @"cordova"
 #define CDV_IONIC_STOP_SCROLL @"stopScroll"
-#define CDV_WKWEBVIEW_FILE_URL_LOAD_SELECTOR @"loadFileURL:allowingReadAccessToURL:"
 #define CDV_SERVER_PATH @"serverBasePath"
 #define LAST_BINARY_VERSION_CODE @"lastBinaryVersionCode"
 #define LAST_BINARY_VERSION_NAME @"lastBinaryVersionName"
@@ -130,11 +129,12 @@ NSTimer *timer;
         if(!IsAtLeastiOSVersion(@"9.0")) {
             return nil;
         }
-    // add to keyWindow to ensure it is 'active'
-    [UIApplication.sharedApplication.keyWindow addSubview:self.engineWebView];
-        self.engineWebView = [[WKWebView alloc] initWithFrame:frame];
-    }
 
+        // add to keyWindow to ensure it is 'active'
+        [UIApplication.sharedApplication.keyWindow addSubview:self.engineWebView];
+
+        self.frame = frame;
+    }
     return self;
 }
 
@@ -219,9 +219,9 @@ NSTimer *timer;
     // check if content thread has died on resume
     NSLog(@"%@", @"CDVWKWebViewEngine will reload WKWebView if required on resume");
     [[NSNotificationCenter defaultCenter]
-        addObserver:self
-           selector:@selector(onAppWillEnterForeground:)
-               name:UIApplicationWillEnterForegroundNotification object:nil];
+     addObserver:self
+     selector:@selector(onAppWillEnterForeground:)
+     name:UIApplicationWillEnterForegroundNotification object:nil];
 
     [[NSNotificationCenter defaultCenter]
      addObserver:self
@@ -304,17 +304,25 @@ static void * KVOContext = &KVOContext;
     if (context == KVOContext) {
         if (object == [self webView] && [keyPath isEqualToString: @"URL"] && [object valueForKeyPath:keyPath] == nil){
             NSLog(@"URL is nil. Reloading WKWebView");
-            [(WKWebView*)_engineWebView reload];
+            if ([self isSafeToReload]) {
+                [(WKWebView*)_engineWebView reload];
+            } else {
+                [self loadErrorPage:nil];
+            }
         }
     } else {
         [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
     }
 }
 
-- (void) onAppWillEnterForeground:(NSNotification*)notification {
+- (void)onAppWillEnterForeground:(NSNotification *)notification {
     if ([self shouldReloadWebView]) {
-        NSLog(@"%@", @"CDVWKWebViewEngine reloading!");
-        [(WKWebView*)_engineWebView reload];
+        if ([self isSafeToReload]) {
+            NSLog(@"%@", @"CDVWKWebViewEngine reloading!");
+            [(WKWebView*)_engineWebView reload];
+        } else {
+            [self loadErrorPage:nil];
+        }
     }
 }
 
@@ -343,7 +351,7 @@ static void * KVOContext = &KVOContext;
 }
 
 - (void)onSocketError:(NSNotification *)notification {
-    //[self loadErrorPage:nil];
+    [self loadErrorPage:nil];
 }
 
 - (BOOL)shouldReloadWebView
@@ -357,7 +365,7 @@ static void * KVOContext = &KVOContext;
     return true; //[self.webServer isRunning] || self.useScheme;
 }
 
-- (BOOL)shouldReloadWebView:(NSURL*)location title:(NSString*)title
+- (BOOL)shouldReloadWebView:(NSURL *)location title:(NSString*)title
 {
     BOOL title_is_nil = (title == nil);
     BOOL location_is_blank = [[location absoluteString] isEqualToString:@"about:blank"];
@@ -375,33 +383,48 @@ static void * KVOContext = &KVOContext;
 }
 
 
-- (id)loadRequest:(NSURLRequest*)request
+- (id)loadRequest:(NSURLRequest *)request
 {
-    if ([self canLoadRequest:request]) { // can load, differentiate between file urls and other schemes
-        if (request.URL.fileURL) {
-            SEL wk_sel = NSSelectorFromString(CDV_WKWEBVIEW_FILE_URL_LOAD_SELECTOR);
-            NSURL* readAccessUrl = [request.URL URLByDeletingLastPathComponent];
-            return ((id (*)(id, SEL, id, id))objc_msgSend)(_engineWebView, wk_sel, request.URL, readAccessUrl);
-        } else {
-            return [(WKWebView*)_engineWebView loadRequest:request];
+    if (request.URL.fileURL) {
+        NSURL* startURL = [NSURL URLWithString:((CDVViewController *)self.viewController).startPage];
+        NSString* startFilePath = [self.commandDelegate pathForResource:[startURL path]];
+        NSURL *url = [[NSURL URLWithString:self.CDV_LOCAL_SERVER] URLByAppendingPathComponent:request.URL.path];
+        if ([request.URL.path isEqualToString:startFilePath]) {
+            url = [NSURL URLWithString:self.CDV_LOCAL_SERVER];
         }
-    } else { // can't load, print out error
-        NSString* errorHtml = [NSString stringWithFormat:
-                               @"<!doctype html>"
-                               @"<title>Error</title>"
-                               @"<div style='font-size:2em'>"
-                               @"   <p>The WebView engine '%@' is unable to load the request: %@</p>"
-                               @"   <p>Most likely the cause of the error is that the loading of file urls is not supported in iOS %@.</p>"
-                               @"</div>",
-                               NSStringFromClass([self class]),
-                               [request.URL description],
-                               [[UIDevice currentDevice] systemVersion]
-                               ];
-        return [self loadHTMLString:errorHtml baseURL:nil];
+        if(request.URL.query) {
+            url = [NSURL URLWithString:[@"?" stringByAppendingString:request.URL.query] relativeToURL:url];
+        }
+        if(request.URL.fragment) {
+            url = [NSURL URLWithString:[@"#" stringByAppendingString:request.URL.fragment] relativeToURL:url];
+        }
+        request = [NSURLRequest requestWithURL:url];
+    }
+    if ([self isSafeToReload]) {
+        return [(WKWebView*)_engineWebView loadRequest:request];
+    } else {
+        return [self loadErrorPage:request];
     }
 }
 
-- (id)loadHTMLString:(NSString*)string baseURL:(NSURL*)baseURL
+- (id)loadErrorPage:(NSURLRequest *)request
+{
+    if (!request) {
+        request = [NSURLRequest requestWithURL:[NSURL URLWithString:self.CDV_LOCAL_SERVER]];
+    }
+    NSString* errorHtml = [NSString stringWithFormat:
+                           @"<html>"
+                           @"<head><title>Error</title></head>"
+                           @"   <div style='font-size:2em'>"
+                           @"       <p><b>Error</b></p>"
+                           @"       <p>Unable to load app.</p>"
+                           @"   </div>"
+                           @"</html>"
+                           ];
+    return [self loadHTMLString:errorHtml baseURL:request.URL];
+}
+
+- (id)loadHTMLString:(NSString *)string baseURL:(NSURL*)baseURL
 {
     return [(WKWebView*)_engineWebView loadHTMLString:string baseURL:baseURL];
 }
@@ -411,22 +434,14 @@ static void * KVOContext = &KVOContext;
     return [(WKWebView*)_engineWebView URL];
 }
 
-- (BOOL) canLoadRequest:(NSURLRequest*)request
+- (BOOL)canLoadRequest:(NSURLRequest *)request
 {
-    // See: https://issues.apache.org/jira/browse/CB-9636
-    SEL wk_sel = NSSelectorFromString(CDV_WKWEBVIEW_FILE_URL_LOAD_SELECTOR);
-
-    // if it's a file URL, check whether WKWebView has the selector (which is in iOS 9 and up only)
-    if (request.URL.fileURL) {
-        return [_engineWebView respondsToSelector:wk_sel];
-    } else {
-        return YES;
-    }
+    return TRUE;
 }
 
-- (void)updateSettings:(NSDictionary*)settings
+- (void)updateSettings:(NSDictionary *)settings
 {
-    WKWebView* wkWebView = (WKWebView*)_engineWebView;
+    WKWebView* wkWebView = (WKWebView *)_engineWebView;
 
     // By default, DisallowOverscroll is false (thus bounce is allowed)
     BOOL bounceAllowed = !([settings cordovaBoolSettingForKey:@"DisallowOverscroll" defaultValue:NO]);
@@ -444,7 +459,7 @@ static void * KVOContext = &KVOContext;
         }
     }
 
-    NSString* decelerationSetting = [settings cordovaSettingForKey:@"WKWebViewDecelerationSpeed"];
+	NSString* decelerationSetting = [settings cordovaSettingForKey:@"WKWebViewDecelerationSpeed"];
     if (!decelerationSetting) {
         // Fallback to the UIWebView-named preference
         decelerationSetting = [settings cordovaSettingForKey:@"UIWebViewDecelerationSpeed"];
@@ -456,11 +471,13 @@ static void * KVOContext = &KVOContext;
         [wkWebView.scrollView setDecelerationRate:UIScrollViewDecelerationRateFast];
     }
 
+    wkWebView.configuration.preferences.minimumFontSize = [settings cordovaFloatSettingForKey:@"MinimumFontSize" defaultValue:0.0];
+    wkWebView.allowsLinkPreview = [settings cordovaBoolSettingForKey:@"AllowLinkPreview" defaultValue:NO];
+    wkWebView.scrollView.scrollEnabled = [settings cordovaBoolSettingForKey:@"ScrollEnabled" defaultValue:NO];
     wkWebView.allowsBackForwardNavigationGestures = [settings cordovaBoolSettingForKey:@"AllowBackForwardNavigationGestures" defaultValue:NO];
-  	wkWebView.allowsLinkPreview = [settings cordovaBoolSettingForKey:@"Allow3DTouchLinkPreview" defaultValue:YES];
 }
 
-- (void)updateWithInfo:(NSDictionary*)info
+- (void)updateWithInfo:(NSDictionary *)info
 {
     NSDictionary* scriptMessageHandlers = [info objectForKey:kCDVWebViewEngineScriptMessageHandlers];
     NSDictionary* settings = [info objectForKey:kCDVWebViewEngineWebViewPreferences];
@@ -502,14 +519,14 @@ static void * KVOContext = &KVOContext;
     return _engineWebView;
 }
 
-- (UIView*)webView
+- (UIView *)webView
 {
     return self.engineWebView;
 }
 
 #pragma mark WKScriptMessageHandler implementation
 
-- (void)userContentController:(WKUserContentController*)userContentController didReceiveScriptMessage:(WKScriptMessage*)message
+- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message
 {
     if (![message.name isEqualToString:CDV_BRIDGE_NAME]) {
         return;
@@ -584,7 +601,7 @@ static void * KVOContext = &KVOContext;
     if ([self isSafeToReload]) {
         [webView reload];
     } else {
-        //[self loadErrorPage:nil];
+        [self loadErrorPage:nil];
     }
 }
 
