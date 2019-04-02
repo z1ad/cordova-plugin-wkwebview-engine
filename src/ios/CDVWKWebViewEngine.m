@@ -724,7 +724,8 @@ static void * KVOContext = &KVOContext;
                                       resultWithStatus    : CDVCommandStatus_OK
                                       messageAsDictionary : jsonObj
                                     ];
-    
+	
+    NSLog( @"safeAreaInsets: %@", jsonObj );
     [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
 }
 
